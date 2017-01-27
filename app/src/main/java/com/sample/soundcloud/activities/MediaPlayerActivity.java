@@ -4,106 +4,141 @@ package com.sample.soundcloud.activities;
  * Created by etiennelawlor on 5/7/15.
  */
 
-import android.app.Activity;
 import android.content.Intent;
+import android.graphics.Typeface;
 import android.media.MediaPlayer;
 import android.media.MediaPlayer.OnPreparedListener;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.NetworkOnMainThreadException;
+import android.support.design.widget.Snackbar;
+import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
 import android.widget.ImageButton;
 import android.widget.ImageView;
+import android.widget.LinearLayout;
 import android.widget.ProgressBar;
-import android.widget.RelativeLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
 import com.sample.soundcloud.R;
-import com.sample.soundcloud.SoundcloudConstants;
-import com.sample.soundcloud.network.Api;
+import com.sample.soundcloud.fragments.AccountFragment;
+import com.sample.soundcloud.network.ServiceGenerator;
+import com.sample.soundcloud.network.SoundCloudService;
+import com.sample.soundcloud.network.interceptors.AuthorizedNetworkInterceptor;
+import com.sample.soundcloud.utilities.FontCache;
+import com.sample.soundcloud.utilities.NetworkLogUtility;
+import com.sample.soundcloud.utilities.NetworkUtility;
+import com.sample.soundcloud.utilities.TrestleUtility;
 import com.squareup.picasso.Picasso;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Set;
 
-import butterknife.Bind;
+import butterknife.BindView;
 import butterknife.ButterKnife;
-import retrofit.Callback;
-import retrofit.RetrofitError;
-import retrofit.client.Response;
-import retrofit.mime.TypedInput;
+import butterknife.OnClick;
+import okhttp3.Headers;
+import okhttp3.ResponseBody;
+import retrofit2.Call;
+import retrofit2.Callback;
+import retrofit2.Response;
 import timber.log.Timber;
 
-public class MediaPlayerActivity extends Activity {
+public class MediaPlayerActivity extends AppCompatActivity {
+
+    // region Views
+    @BindView(R.id.pause)
+    ImageButton pauseImageButton;
+    @BindView(R.id.play)
+    ImageButton playImageButton;
+    @BindView(R.id.artist_tv)
+    TextView artistTextView;
+    @BindView(R.id.title_tv)
+    TextView titleTextView;
+    @BindView(R.id.cover_image_iv)
+    ImageView coverImageImageView;
+    @BindView(R.id.sb)
+    SeekBar seekBar;
+    @BindView(R.id.total_time_tv)
+    TextView totalTimeTextView;
+    @BindView(R.id.current_time_tv)
+    TextView currentTimeTextView;
+    @BindView(R.id.media_fl)
+    FrameLayout mediaFrameLayout;
+    @BindView(R.id.pb)
+    ProgressBar progressBar;
+    @BindView(R.id.error_ll)
+    LinearLayout errorLinearLayout;
+    @BindView(R.id.error_tv)
+    TextView errorTextView;
+    // endregion
 
     // region Member Variables
-    @Bind(R.id.pause)
-    ImageButton mPauseImageButton;
-    @Bind(R.id.play)
-    ImageButton mPlayImageButton;
-    @Bind(R.id.artist_tv)
-    TextView mArtistTextView;
-    @Bind(R.id.title_tv)
-    TextView mTitleTextView;
-    @Bind(R.id.cover_image_iv)
-    ImageView mCoverImageImageView;
-    @Bind(R.id.sb)
-    SeekBar mSeekBar;
-    @Bind(R.id.total_time_tv)
-    TextView mTotalTimeTextView;
-    @Bind(R.id.current_time_tv)
-    TextView mCurrentTimeTextView;
-    @Bind(R.id.media_rl)
-    RelativeLayout mMediaRelativeLayout;
-    @Bind(R.id.pb)
-    ProgressBar mProgressBar;
+    private MediaPlayer mediaPlayer;
+    private String artist = "";
+    private String title = "";
+    private String coverImage = "";
+    private SoundCloudService soundCloudService;
+    private List<Call> calls;
+    private Typeface font;
+    private long trackId;
 
-    private MediaPlayer mMediaPlayer;
-    private String mArtist = "";
-    private String mTitle = "";
-    private String mCoverImage = "";
+    private static Handler handler = new Handler();
 
-    private static Handler mHandler = new Handler();
-
-    private final Runnable mRunnable = new Runnable() {
+    private final Runnable runnable = new Runnable() {
 
         @Override
         public void run() {
-            if (mMediaPlayer != null) {
+            if (mediaPlayer != null) {
 
                 //set max value
-                int mDuration = mMediaPlayer.getDuration();
-                mSeekBar.setMax(mDuration);
+                int mDuration = mediaPlayer.getDuration();
+                seekBar.setMax(mDuration);
 
                 //update total time text view
-                mTotalTimeTextView.setText(getTimeString(mDuration));
+                totalTimeTextView.setText(getTimeString(mDuration));
 
                 //set progress to current position
-                int mCurrentPosition = mMediaPlayer.getCurrentPosition();
-                mSeekBar.setProgress(mCurrentPosition);
+                int mCurrentPosition = mediaPlayer.getCurrentPosition();
+                seekBar.setProgress(mCurrentPosition);
 
                 //update current time text view
-                mCurrentTimeTextView.setText(getTimeString(mCurrentPosition));
+                currentTimeTextView.setText(getTimeString(mCurrentPosition));
 
                 //handle drag on seekbar
-                mSeekBar.setOnSeekBarChangeListener(mSeekBarChangeListener);
+                seekBar.setOnSeekBarChangeListener(mSeekBarChangeListener);
 
                 if (mCurrentPosition == mDuration) {
-                    mPauseImageButton.setVisibility(View.GONE);
-                    mPlayImageButton.setVisibility(View.VISIBLE);
+                    pauseImageButton.setVisibility(View.GONE);
+                    playImageButton.setVisibility(View.VISIBLE);
                 }
             }
 
             //repeat above code every second
-            mHandler.postDelayed(this, 10);
+            handler.postDelayed(this, 10);
         }
     };
     // endregion
 
     // region Listeners
+    @OnClick(R.id.reload_btn)
+    public void onReloadButtonClicked() {
+        errorLinearLayout.setVisibility(View.GONE);
+        progressBar.setVisibility(View.VISIBLE);
+
+        Call getStreamInfoCall = soundCloudService.getStreamInfo(trackId);
+        calls.add(getStreamInfoCall);
+        getStreamInfoCall.enqueue(getStreamInfoCallback);
+    }
+
     private SeekBar.OnSeekBarChangeListener mSeekBarChangeListener = new SeekBar.OnSeekBarChangeListener() {
 
         @Override
@@ -118,100 +153,131 @@ public class MediaPlayerActivity extends Activity {
 
         @Override
         public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-            if (mMediaPlayer != null && fromUser) {
-                mMediaPlayer.seekTo(progress);
+            if (mediaPlayer != null && fromUser) {
+                mediaPlayer.seekTo(progress);
             }
         }
     };
 
-    private OnPreparedListener mMediaPlayerOnPreparedListener = new OnPreparedListener() {
+    private OnPreparedListener mediaPlayerOnPreparedListener = new OnPreparedListener() {
         public void onPrepared(final MediaPlayer mp) {
 
-            mProgressBar.setVisibility(View.GONE);
-            mMediaRelativeLayout.setVisibility(View.VISIBLE);
+            progressBar.setVisibility(View.GONE);
+            mediaFrameLayout.setVisibility(View.VISIBLE);
 
-            mArtistTextView.setText(mArtist);
-            mTitleTextView.setText(mTitle);
+            artistTextView.setText(artist);
+            titleTextView.setText(title);
 
-            Picasso.with(getApplicationContext())
-                    .load(mCoverImage)
-                    .into(mCoverImageImageView);
+            if(!TextUtils.isEmpty(coverImage)){
+                Picasso.with(getApplicationContext())
+                        .load(coverImage)
+                        .into(coverImageImageView);
+            }
 
-            mPlayImageButton.setVisibility(View.GONE);
-            mPauseImageButton.setVisibility(View.VISIBLE);
+            playImageButton.setVisibility(View.GONE);
+            pauseImageButton.setVisibility(View.VISIBLE);
 
             //start media player
             mp.start();
 
             //update seekbar
-            mRunnable.run();
+            runnable.run();
         }
     };
     // endregion
 
     // region Callbacks
-    private Callback<Response> mGetStreamInfoCallback = new Callback<Response>() {
+
+    private Callback<ResponseBody> getStreamInfoCallback = new Callback<ResponseBody>() {
         @Override
-        public void success(Response response, Response response2) {
+        public void onResponse(Call<ResponseBody> call, Response<ResponseBody> response) {
+            progressBar.setVisibility(View.GONE);
+
+            if (!response.isSuccessful()) {
+                int responseCode = response.code();
+                switch (responseCode) {
+                    case 504: // 504 Unsatisfiable Request (only-if-cached)
+                        errorTextView.setText("Can't load data.\nCheck your network connection.");
+                        errorLinearLayout.setVisibility(View.VISIBLE);
+                        break;
+                    case 429: // 429 Too Many Requests
+                        errorTextView.setText("The stream cannot be played\nnow. Please try again later.");
+                        errorLinearLayout.setVisibility(View.VISIBLE);
+                        break;
+                    default:
+                        break;
+                }
+                return;
+            }
 
             if (!isFinishing()) {
 
-                String audioFile = response.getUrl();
+                String audioFile = response.raw().networkResponse().request().url().toString();
 
                 if (!TextUtils.isEmpty(audioFile)) {
 
+                    audioFile = getUpdatedAudioFile(audioFile);
+
+                    Timber.d("Audiofile - "+audioFile);
+
                     // create a media player
-                    mMediaPlayer = new MediaPlayer();
+                    mediaPlayer = new MediaPlayer();
 
                     // try to load data and play
                     try {
 
                         // give data to mMediaPlayer
-                        mMediaPlayer.setDataSource(audioFile);
+                        mediaPlayer.setDataSource(audioFile);
+
+                        mediaPlayer.setOnPreparedListener(mediaPlayerOnPreparedListener);
+
                         // media player asynchronous preparation
-                        mMediaPlayer.prepareAsync();
+                        mediaPlayer.prepareAsync();
 
                         // execute this code at the end of asynchronous media player preparation
-                        mMediaPlayer.setOnPreparedListener(mMediaPlayerOnPreparedListener);
+                        mediaPlayer.setOnErrorListener(new MediaPlayer.OnErrorListener() {
+                            @Override
+                            public boolean onError(MediaPlayer mediaPlayer, int i, int i1) {
+                                return false;
+                            }
+                        });
                     } catch (IOException e) {
                         finish();
 //                        Toast.makeText(MediaPlayerActivity.this, getString(R.string.file_not_found), Toast.LENGTH_SHORT).show();
                     }
                 } else {
-                    mProgressBar.setVisibility(View.GONE);
-                    mMediaRelativeLayout.setVisibility(View.VISIBLE);
+                    progressBar.setVisibility(View.GONE);
+                    mediaFrameLayout.setVisibility(View.VISIBLE);
+                }
+            }
+
+            okhttp3.Response rawResponse = response.raw();
+            if(rawResponse != null){
+                Headers headers = rawResponse.headers();
+                if(headers != null){
+                    String[] strings = headers.toString().split("\n");
+                    for(String string : strings){
+                        if(string.equals("Warning: 110 HttpURLConnection \"Response is stale\"")){
+                            Snackbar.make(findViewById(R.id.main_content),
+                                    TrestleUtility.getFormattedText("Network connection is unavailable.", font, 16),
+                                    Snackbar.LENGTH_LONG)
+                                    .show();
+                            break;
+                        }
+                    }
                 }
             }
         }
 
         @Override
-        public void failure(RetrofitError error) {
-            Timber.d("failure()");
+        public void onFailure(Call<ResponseBody> call, Throwable t) {
+            NetworkLogUtility.logFailure(call, t);
 
-            if(error != null){
-                Response response = error.getResponse();
-                if(response != null){
-                    String reason = response.getReason();
-                    Timber.d("failure() : reason -"+reason);
+            progressBar.setVisibility(View.GONE);
 
-                    TypedInput body = response.getBody();
-                    if(body != null){
-                        Timber.d("failure() : body.toString() -"+body.toString());
-                    }
-
-                    int status = response.getStatus();
-                    Timber.d("failure() : status -"+status);
-                }
-
-                Throwable cause = error.getCause();
-                if(cause != null){
-                    Timber.d("failure() : cause.toString() -"+cause.toString());
-                }
-
-                Object body = error.getBody();
-                if(body != null){
-                    Timber.d("failure() : body.toString() -"+body.toString());
-                }
+            if(NetworkUtility.isKnownException(t)){
+                errorTextView.setText("Can't load data.\nCheck your network connection.");
+                errorLinearLayout.setVisibility(View.VISIBLE);
             }
         }
     };
@@ -230,46 +296,75 @@ public class MediaPlayerActivity extends Activity {
         setContentView(R.layout.activity_media_player);
         ButterKnife.bind(this);
 
+        font = FontCache.getTypeface("MavenPro-Medium.ttf", this);
+
         String streamUrl = "";
 
         // get data from main activity intent
         Intent intent = getIntent();
         if (intent != null) {
-            streamUrl = intent.getStringExtra(SoundcloudConstants.AUDIO_STREAM_URL);
-            mArtist = intent.getStringExtra(SoundcloudConstants.AUDIO_ARTIST);
-            mTitle = intent.getStringExtra(SoundcloudConstants.AUDIO_TITLE);
-            mCoverImage = intent.getStringExtra(SoundcloudConstants.IMG_URL);
+            Bundle extras = intent.getExtras();
+            if(extras != null){
+                streamUrl = extras.getString(AccountFragment.AUDIO_STREAM_URL);
+                artist = extras.getString(AccountFragment.AUDIO_ARTIST);
+                title = extras.getString(AccountFragment.AUDIO_TITLE);
+                coverImage = extras.getString(AccountFragment.IMG_URL);
+            }
         }
 
         Uri streamUri = Uri.parse(streamUrl);
-        long trackId = Long.valueOf(streamUri.getPathSegments().get(1));
+        trackId = Long.valueOf(streamUri.getPathSegments().get(1));
 
-        Api.getService(Api.getEndpointUrl()).getStreamInfo(trackId, mGetStreamInfoCallback);
+        calls = new ArrayList<>();
+
+        soundCloudService = ServiceGenerator.createService(
+                SoundCloudService.class,
+                SoundCloudService.BASE_URL,
+                new AuthorizedNetworkInterceptor(this));
+
+        Call getStreamInfoCall = soundCloudService.getStreamInfo(trackId);
+        calls.add(getStreamInfoCall);
+        getStreamInfoCall.enqueue(getStreamInfoCallback);
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        mHandler.removeCallbacks(mRunnable);
+        handler.removeCallbacks(runnable);
+
+        Timber.d("onDestroy() : calls.size() - " + calls.size());
+
+        for (final Call call : calls) {
+            Timber.d("onDestroy() : call.cancel() - " + call.toString());
+
+            try {
+                call.cancel();
+            } catch (NetworkOnMainThreadException e) {
+                Timber.d("onDestroy() : NetworkOnMainThreadException thrown");
+                e.printStackTrace();
+            }
+        }
+
+        calls.clear();
     }
     // endregion
 
     // region Helper Methods
     public void play(View view) {
-        mPlayImageButton.setVisibility(View.GONE);
-        mPauseImageButton.setVisibility(View.VISIBLE);
-        mMediaPlayer.start();
+        playImageButton.setVisibility(View.GONE);
+        pauseImageButton.setVisibility(View.VISIBLE);
+        mediaPlayer.start();
     }
 
     public void pause(View view) {
-        mPlayImageButton.setVisibility(View.VISIBLE);
-        mPauseImageButton.setVisibility(View.GONE);
-        mMediaPlayer.pause();
+        playImageButton.setVisibility(View.VISIBLE);
+        pauseImageButton.setVisibility(View.GONE);
+        mediaPlayer.pause();
     }
 
     public void stop(View view) {
-        mMediaPlayer.seekTo(0);
-        mMediaPlayer.pause();
+        mediaPlayer.seekTo(0);
+        mediaPlayer.pause();
     }
 
     public void seekForward(View view) {
@@ -277,14 +372,14 @@ public class MediaPlayerActivity extends Activity {
         int seekForwardTime = 5000;
 
         // get current song position
-        int currentPosition = mMediaPlayer.getCurrentPosition();
+        int currentPosition = mediaPlayer.getCurrentPosition();
         // check if seekForward time is lesser than song duration
-        if (currentPosition + seekForwardTime <= mMediaPlayer.getDuration()) {
+        if (currentPosition + seekForwardTime <= mediaPlayer.getDuration()) {
             // forward song
-            mMediaPlayer.seekTo(currentPosition + seekForwardTime);
+            mediaPlayer.seekTo(currentPosition + seekForwardTime);
         } else {
             // forward to end position
-            mMediaPlayer.seekTo(mMediaPlayer.getDuration());
+            mediaPlayer.seekTo(mediaPlayer.getDuration());
         }
     }
 
@@ -293,24 +388,24 @@ public class MediaPlayerActivity extends Activity {
         int seekBackwardTime = 5000;
 
         // get current song position
-        int currentPosition = mMediaPlayer.getCurrentPosition();
+        int currentPosition = mediaPlayer.getCurrentPosition();
         // check if seekBackward time is greater than 0 sec
         if (currentPosition - seekBackwardTime >= 0) {
             // forward song
-            mMediaPlayer.seekTo(currentPosition - seekBackwardTime);
+            mediaPlayer.seekTo(currentPosition - seekBackwardTime);
         } else {
             // backward to starting position
-            mMediaPlayer.seekTo(0);
+            mediaPlayer.seekTo(0);
         }
     }
 
     public void onBackPressed() {
         super.onBackPressed();
 
-        if (mMediaPlayer != null) {
-            mMediaPlayer.reset();
-            mMediaPlayer.release();
-            mMediaPlayer = null;
+        if (mediaPlayer != null) {
+            mediaPlayer.reset();
+            mediaPlayer.release();
+            mediaPlayer = null;
         }
         finish();
     }
@@ -338,6 +433,25 @@ public class MediaPlayerActivity extends Activity {
         builder.append(String.format("%02d", seconds));
 
         return builder.toString();
+    }
+
+    private String getUpdatedAudioFile(String aFile){
+//        String audioFile = "";
+        Uri audioUri = Uri.parse(aFile);
+        String scheme = audioUri.getScheme();
+        String host = audioUri.getHost();
+        String encodedPath = audioUri.getEncodedPath();
+
+        String queryString = "?";
+        Set<String> queryParameterNames = audioUri.getQueryParameterNames();
+        for (String s : queryParameterNames) {
+            if(!(s.equals("client_id"))){
+                String queryParam = audioUri.getQueryParameter(s);
+                queryString += String.format("%s=%s&", s, queryParam);
+            }
+        }
+
+        return String.format("%s://%s%s%s", scheme, host, encodedPath, queryString.substring(0, queryString.length()-1));
     }
     // endregion
 }

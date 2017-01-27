@@ -17,47 +17,50 @@ import android.text.TextUtils;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.sample.soundcloud.R;
 import com.sample.soundcloud.SoundcloudApplication;
-import com.sample.soundcloud.SoundcloudConstants;
 import com.sample.soundcloud.activities.MediaPlayerActivity;
 import com.sample.soundcloud.adapters.FavoritesAdapter;
 import com.sample.soundcloud.models.Account;
-import com.sample.soundcloud.network.Api;
+import com.sample.soundcloud.network.ServiceGenerator;
+import com.sample.soundcloud.network.SoundCloudService;
+import com.sample.soundcloud.network.interceptors.AuthorizedNetworkInterceptor;
 import com.sample.soundcloud.network.models.Track;
 import com.sample.soundcloud.network.models.UserProfile;
-import com.sample.soundcloud.otto.BusProvider;
 import com.sample.soundcloud.realm.RealmUtility;
 import com.sample.soundcloud.realm.models.RealmAccount;
 import com.sample.soundcloud.realm.models.RealmTrack;
 import com.sample.soundcloud.realm.models.RealmUserProfile;
-import com.sample.soundcloud.ui.CircleTransformation;
-import com.sample.soundcloud.utilities.SoundcloudUtility;
+import com.sample.soundcloud.utilities.NetworkUtility;
 import com.squareup.leakcanary.RefWatcher;
 import com.squareup.picasso.Picasso;
-import com.squareup.picasso.Transformation;
 
 import java.text.NumberFormat;
 import java.util.List;
 import java.util.Locale;
 
-import butterknife.Bind;
+import butterknife.BindView;
 import butterknife.ButterKnife;
+import butterknife.OnClick;
+import butterknife.Unbinder;
+import de.hdodenhof.circleimageview.CircleImageView;
 import io.realm.Realm;
 import io.realm.RealmChangeListener;
 import io.realm.RealmList;
 import io.realm.exceptions.RealmMigrationNeededException;
-import retrofit.RetrofitError;
+import jp.wasabeef.recyclerview.animators.SlideInUpAnimator;
+import retrofit2.adapter.rxjava.HttpException;
 import rx.Observable;
+import rx.Subscription;
 import rx.android.schedulers.AndroidSchedulers;
 import rx.functions.Action1;
 import rx.functions.Func2;
 import rx.schedulers.Schedulers;
+import rx.subscriptions.CompositeSubscription;
 import timber.log.Timber;
 
 
@@ -67,6 +70,27 @@ public class AccountFragment extends Fragment implements // region Interfaces
 {
 
     // region Constants
+    public static final String AUDIO_STREAM_URL = "AUDIO_STREAM_URL";
+    public static final String AUDIO_ARTIST = "AUDIO_ARTIST";
+    public static final String AUDIO_TITLE = "AUDIO_TITLE";
+    public static final String IMG_URL = "IMG_URL";
+
+    //    public static final String USERNAME = "hardwell";
+//    public static final String USERNAME = "eric-oetting";
+    public static final String USERNAME = "kaskade";
+//    public static final String USERNAME = "lawlorslaw";
+//    public static final String USERNAME = "calvinharris";
+//    public static final String USERNAME = "mallywobbles";
+//    public static final String USERNAME = "dillonfrancis";
+//    public static final String USERNAME = "zedd";
+//    public static final String USERNAME = "martingarrix";
+//    public static final String USERNAME = "tiesto";
+//    public static final String USERNAME = "deadmau5";
+//    public static final String USERNAME = "rachael-shreve";
+
+    private static final int TEN_MINUTES = 600000;
+    public static final int PAGE_LIMIT = 5;
+
     // The authority for the sync adapter's content provider
     private static final String AUTHORITY = "com.sample.soundcloud.provider";
     // An account type, in the form of a domain name
@@ -74,44 +98,57 @@ public class AccountFragment extends Fragment implements // region Interfaces
     private static final long SYNC_INTERVAL = 60L;
     // endregion
 
-    // region Member Variables
-    @Bind(R.id.avatar_iv)
-    ImageView mAvatarImageView;
-    @Bind(R.id.username_tv)
-    TextView mUsernameTextView;
-    @Bind(R.id.location_tv)
-    TextView mLocationTextView;
-    @Bind(R.id.followers_count_tv)
-    TextView mFollowersCountTextView;
-    @Bind(R.id.track_count_tv)
-    TextView mTrackCountTextView;
-    @Bind(R.id.playlist_count_tv)
-    TextView mPlaylistCountTextView;
-    @Bind(R.id.favorites_rv)
-    RecyclerView mFavoritesRecyclerView;
-    @Bind(android.R.id.empty)
-    View mEmptyView;
-    @Bind(R.id.account_ll)
-    LinearLayout mAccountLinearLayout;
-    @Bind(R.id.pb)
-    ProgressBar mProgressBar;
-    @Bind(R.id.error_ll)
-    LinearLayout mErrorLinearLayout;
-    @Bind(R.id.error_tv)
-    TextView mErrorTextView;
+    // region Views
+    @BindView(R.id.avatar_iv)
+    CircleImageView avatarImageView;
+    @BindView(R.id.username_tv)
+    TextView usernameTextView;
+    @BindView(R.id.location_tv)
+    TextView locationTextView;
+    @BindView(R.id.followers_count_tv)
+    TextView followersCountTextView;
+    @BindView(R.id.track_count_tv)
+    TextView trackCountTextView;
+    @BindView(R.id.playlist_count_tv)
+    TextView playlistCountTextView;
+    @BindView(R.id.rv)
+    RecyclerView recyclerView;
+    @BindView(android.R.id.empty)
+    LinearLayout emptyLinearLayout;
+    @BindView(R.id.account_ll)
+    LinearLayout accountLinearLayout;
+    @BindView(R.id.pb)
+    ProgressBar progressBar;
+    @BindView(R.id.error_ll)
+    LinearLayout errorLinearLayout;
+    @BindView(R.id.error_tv)
+    TextView errorTextView;
+    // endregion
 
-    private FavoritesAdapter mFavoritesAdapter;
-    private Realm mRealm;
+    // region Member Variables
+    private FavoritesAdapter favoritesAdapter;
+    private Realm realm;
+    private Unbinder unbinder;
+    private SoundCloudService soundCloudService;
+    private CompositeSubscription compositeSubscription;
     // endregion
 
     // region Listeners
+    @OnClick(R.id.reload_btn)
+    public void onReloadButtonClicked() {
+        emptyLinearLayout.setVisibility(View.GONE);
+        errorLinearLayout.setVisibility(View.GONE);
+        progressBar.setVisibility(View.VISIBLE);
 
-    private RealmChangeListener mAccountChangedListener = new RealmChangeListener() {
+        loadAccount();
+    }
+
+    private RealmChangeListener accountChangedListener = new RealmChangeListener() {
         @Override
-        public void onChange() {
-            Timber.d("Soundcloud : mAccountChangedListener : onChange()");
+        public void onChange(Object element) {
+            Timber.d("Soundcloud : accountChangedListener : onChange()");
 
-            mErrorLinearLayout.setVisibility(View.GONE);
+            errorLinearLayout.setVisibility(View.GONE);
 
             RealmAccount cachedAccount = RealmUtility.getCachedAccount();
 
@@ -125,8 +162,8 @@ public class AccountFragment extends Fragment implements // region Interfaces
                 }
             }
 
-            mProgressBar.setVisibility(View.GONE);
-            mAccountLinearLayout.setVisibility(View.VISIBLE);
+            progressBar.setVisibility(View.GONE);
+            accountLinearLayout.setVisibility(View.VISIBLE);
         }
     };
     // endregion
@@ -141,6 +178,12 @@ public class AccountFragment extends Fragment implements // region Interfaces
     // endregion
 
     // region Factory Methods
+    public static AccountFragment newInstance(Bundle extras) {
+        AccountFragment fragment = new AccountFragment();
+        fragment.setArguments(extras);
+        return fragment;
+    }
+
     public static AccountFragment newInstance() {
         AccountFragment fragment = new AccountFragment();
         Bundle args = new Bundle();
@@ -155,17 +198,15 @@ public class AccountFragment extends Fragment implements // region Interfaces
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        BusProvider.getInstance().register(this);
+        compositeSubscription = new CompositeSubscription();
 
-        Context context = SoundcloudApplication.getInstance().getApplicationContext();
-        try {
-            mRealm = Realm.getInstance(context);
-        } catch (RealmMigrationNeededException e) {
-            Realm.deleteRealm(RealmUtility.getRealmConfiguration(context));
-            mRealm = Realm.getInstance(context);
-        }
+        realm = Realm.getDefaultInstance();
+        realm.addChangeListener(accountChangedListener);
 
-        mRealm.addChangeListener(mAccountChangedListener);
+        soundCloudService = ServiceGenerator.createService(
+                SoundCloudService.class,
+                SoundCloudService.BASE_URL,
+                new AuthorizedNetworkInterceptor(getContext()));
 
         // Create account, if needed
         android.accounts.Account androidAccount = createSyncAccount(getActivity());
@@ -184,7 +225,7 @@ public class AccountFragment extends Fragment implements // region Interfaces
     public View onCreateView(LayoutInflater inflater, ViewGroup container,
                              Bundle savedInstanceState) {
         View rootView = inflater.inflate(R.layout.fragment_account, container, false);
-        ButterKnife.bind(this, rootView);
+        unbinder = ButterKnife.bind(this, rootView);
 
         return rootView;
     }
@@ -194,11 +235,12 @@ public class AccountFragment extends Fragment implements // region Interfaces
         super.onViewCreated(view, savedInstanceState);
 
         LinearLayoutManager layoutManager = new LinearLayoutManager(getActivity());
-        mFavoritesRecyclerView.setLayoutManager(layoutManager);
-        mFavoritesAdapter = new FavoritesAdapter();
-        mFavoritesAdapter.setOnItemClickListener(this);
+        recyclerView.setLayoutManager(layoutManager);
+        favoritesAdapter = new FavoritesAdapter();
+        favoritesAdapter.setOnItemClickListener(this);
+        recyclerView.setItemAnimator(new SlideInUpAnimator());
 
-        mFavoritesRecyclerView.setAdapter(mFavoritesAdapter);
+        recyclerView.setAdapter(favoritesAdapter);
 
         // TODO handle pagination
         //        mFavoritesRecyclerView.setOnScrollListener(new RecyclerView.OnScrollListener() {
@@ -229,27 +271,19 @@ public class AccountFragment extends Fragment implements // region Interfaces
     }
 
     @Override
-    public void onResume() {
-        super.onResume();
-    }
-
-    @Override
-    public void onPause() {
-        super.onPause();
-    }
-
-    @Override
     public void onDestroyView() {
         super.onDestroyView();
-        ButterKnife.unbind(this);
+        unbinder.unbind();
     }
 
     @Override
     public void onDestroy() {
         super.onDestroy();
 
-        mRealm.removeChangeListener(mAccountChangedListener);
-        mRealm.close();
+        compositeSubscription.unsubscribe();
+
+        realm.removeChangeListener(accountChangedListener);
+        realm.close();
 
         RefWatcher refWatcher = SoundcloudApplication.getRefWatcher(getActivity());
         refWatcher.watch(this);
@@ -259,43 +293,19 @@ public class AccountFragment extends Fragment implements // region Interfaces
 
     // region FavoritesAdapter.OnItemClickListener Methods
     @Override
-    public void onItemClick(int position) {
-        final RealmTrack track = mFavoritesAdapter.getItem(position);
+    public void onItemClick(int position, View view) {
+        final RealmTrack track = favoritesAdapter.getItem(position);
 
         String streamUrl = track.getStreamUrl();
         long duration = track.getDuration();
 
-        if (duration < SoundcloudConstants.TEN_MINUTES) {
+        if (duration < TEN_MINUTES) {
             playInMediaPlayer(track, streamUrl);
         } else {
             playInBrowser(streamUrl);
         }
     }
 
-    // endregion
-
-    // region Otto Methods
-//    @Subscribe
-//    public void onNetworkConnected(NetworkConnectedEvent event) {
-//        Timber.d("Soundcloud : onNetworkConnected()");
-//
-//        if(mErrorLinearLayout.getVisibility() == View.VISIBLE){
-//            mErrorLinearLayout.setVisibility(View.GONE);
-//            mProgressBar.setVisibility(View.VISIBLE);
-//        }
-//
-//        loadAccount();
-//
-//    }
-//
-//    @Subscribe
-//    public void onNetworkDisconnected(NetworkConnectedEvent event) {
-//        Timber.d("Soundcloud : onNetworkDisconnected()");
-//
-////        if(mAccountLinearLayout.getVisibility() == View.VISIBLE){
-////            Toast.makeText(getActivity(), "Network Disconnected", Toast.LENGTH_SHORT).show();
-////        }
-//    }
     // endregion
 
     // region Helper Methods
@@ -317,15 +327,15 @@ public class AccountFragment extends Fragment implements // region Interfaces
                 }
             }
 
-            mProgressBar.setVisibility(View.GONE);
-            mAccountLinearLayout.setVisibility(View.VISIBLE);
+            progressBar.setVisibility(View.GONE);
+            accountLinearLayout.setVisibility(View.VISIBLE);
 
         } else {
             // Account is not cached
 
-            Observable.combineLatest(
-                    Api.getService(Api.getEndpointUrl()).getUserProfile(SoundcloudConstants.USERNAME),
-                    Api.getService(Api.getEndpointUrl()).getFavoriteTracks(SoundcloudConstants.USERNAME),
+            Subscription subscription = Observable.combineLatest(
+                    soundCloudService.getUserProfile(USERNAME),
+                    soundCloudService.getFavoriteTracks(USERNAME),
                     new Func2<UserProfile, List<Track>, Account>() {
                         @Override
                         public Account call(UserProfile userProfile, List<Track> tracks) {
@@ -343,79 +353,47 @@ public class AccountFragment extends Fragment implements // region Interfaces
                         }
                     }, new Action1<Throwable>() {
                         @Override
-                        public void call(Throwable throwable) {
-                            Timber.e(throwable, "Soundcloud error");
+                        public void call(Throwable t) {
+                            Timber.e(t, "Soundcloud error");
+                            progressBar.setVisibility(View.GONE);
 
-                            if (throwable instanceof RetrofitError) {
-                                RetrofitError.Kind errorKind = ((RetrofitError) throwable).getKind();
+                            if (NetworkUtility.isKnownException(t)) {
+//                                int responseCode = ((HttpException) throwable).code();
+//                                if(responseCode == 504) { // 504 Unsatisfiable Request (only-if-cached)
+//                                    errorTextView.setText("Can't load data.\nCheck your network connection.");
+//                                    errorLinearLayout.setVisibility(View.VISIBLE);
+//                                }
 
-                                mErrorTextView.setText(getErrorMessage(errorKind));
-                                Timber.e(throwable, "Soundcloud error : errorMessage - " + getErrorMessage(errorKind));
-
-                                mProgressBar.setVisibility(View.GONE);
-                                if (mAccountLinearLayout.getVisibility() == View.GONE)
-                                    mErrorLinearLayout.setVisibility(View.VISIBLE);
+                                errorTextView.setText("Can't load data.\nCheck your network connection.");
+                                errorLinearLayout.setVisibility(View.VISIBLE);
                             }
                         }
                     });
+            compositeSubscription.add(subscription);
+
         }
 
-    }
-
-    private String getErrorMessage(RetrofitError.Kind errorKind) {
-        String errorMessage = "";
-        switch (errorKind) {
-            case NETWORK:
-//                                    errorMessage = "Network Error";
-                errorMessage = "Can't load data.\nCheck your network connection.";
-                break;
-            case HTTP:
-                errorMessage = "HTTP Error";
-                break;
-            case UNEXPECTED:
-                errorMessage = "Unexpected Error";
-                break;
-            case CONVERSION:
-                errorMessage = "Conversion Error";
-                break;
-            default:
-                break;
-        }
-
-        return errorMessage;
     }
 
     private void setUpUserProfile(RealmUserProfile userProfile) {
         if (userProfile != null) {
-            setUpAvatar(mAvatarImageView, userProfile);
-            setUpUsername(mUsernameTextView, userProfile);
-            setUpLocation(mLocationTextView, userProfile);
-            setUpFollowersCount(mFollowersCountTextView, userProfile);
-            setUpTrackCount(mTrackCountTextView, userProfile);
-            setUpPlaylistCount(mPlaylistCountTextView, userProfile);
+            setUpAvatar(avatarImageView, userProfile);
+            setUpUsername(usernameTextView, userProfile);
+            setUpLocation(locationTextView, userProfile);
+            setUpFollowersCount(followersCountTextView, userProfile);
+            setUpTrackCount(trackCountTextView, userProfile);
+            setUpPlaylistCount(playlistCountTextView, userProfile);
         }
     }
 
-    private void setUpAvatar(ImageView iv, RealmUserProfile userProfile) {
+    private void setUpAvatar(CircleImageView iv, RealmUserProfile userProfile) {
         String avatarUrl = userProfile.getAvatarUrl();
         if (!TextUtils.isEmpty(avatarUrl)) {
+            // https://i1.sndcdn.com/avatars-000028479557-aid19w-large.jpg
             avatarUrl = avatarUrl.replace("large.jpg", "t500x500.jpg");
-
-            Transformation roundedTransformation
-                    = new CircleTransformation(getResources().getColor(R.color.primary),
-                    getResources().getColor(R.color.primary));
-
-            int dimension = SoundcloudUtility.dp2px(getActivity(), 70);
-
-//                        https://i1.sndcdn.com/avatars-000028479557-aid19w-large.jpg
             Picasso.with(getActivity())
                     .load(avatarUrl)
-                    .transform(roundedTransformation)
-//                                .fit()
-                    .resize(dimension, dimension)
-                    .centerCrop()
-                            //                .placeholder(R.drawable.ic_placeholder)
-                            //                .error(R.drawable.ic_error)
+                    .placeholder(R.color.primary)
                     .into(iv);
         }
     }
@@ -423,10 +401,10 @@ public class AccountFragment extends Fragment implements // region Interfaces
     private void setUpUsername(TextView tv, RealmUserProfile userProfile) {
         String userName = userProfile.getUsername();
         if (!TextUtils.isEmpty(userName)) {
-            mUsernameTextView.setText(userName);
-            mUsernameTextView.setVisibility(View.VISIBLE);
+            tv.setText(userName);
+            tv.setVisibility(View.VISIBLE);
         } else {
-            mUsernameTextView.setVisibility(View.GONE);
+            tv.setVisibility(View.GONE);
         }
     }
 
@@ -444,10 +422,10 @@ public class AccountFragment extends Fragment implements // region Interfaces
         }
 
         if (!TextUtils.isEmpty(location)) {
-            mLocationTextView.setText(location);
-            mLocationTextView.setVisibility(View.VISIBLE);
+            locationTextView.setText(location);
+            locationTextView.setVisibility(View.VISIBLE);
         } else {
-            mLocationTextView.setVisibility(View.GONE);
+            locationTextView.setVisibility(View.GONE);
         }
     }
 
@@ -503,18 +481,16 @@ public class AccountFragment extends Fragment implements // region Interfaces
     }
 
     private void setUpFavoriteTracks(RealmList<RealmTrack> tracks) {
-        mFavoritesAdapter.clear();
+        favoritesAdapter.clear();
 
-        if (tracks != null) {
-            for (RealmTrack track : tracks) {
-                mFavoritesAdapter.add(mFavoritesAdapter.getItemCount(), track);
-            }
-        }
+        favoritesAdapter.addAll(tracks);
 
-        if (mFavoritesAdapter.getItemCount() == 0) {
-            mEmptyView.setVisibility(View.VISIBLE);
+        if (favoritesAdapter.isEmpty()) {
+            recyclerView.setVisibility(View.GONE);
+            emptyLinearLayout.setVisibility(View.VISIBLE);
         } else {
-            mEmptyView.setVisibility(View.GONE);
+            emptyLinearLayout.setVisibility(View.GONE);
+            recyclerView.setVisibility(View.VISIBLE);
         }
     }
 
@@ -533,10 +509,12 @@ public class AccountFragment extends Fragment implements // region Interfaces
         }
 
         Intent intent = new Intent(getActivity(), MediaPlayerActivity.class);
-        intent.putExtra(SoundcloudConstants.AUDIO_STREAM_URL, streamUrl);
-        intent.putExtra(SoundcloudConstants.AUDIO_ARTIST, artist);
-        intent.putExtra(SoundcloudConstants.AUDIO_TITLE, title);
-        intent.putExtra(SoundcloudConstants.IMG_URL, artworkUrl);
+        Bundle bundle = new Bundle();
+        bundle.putString(AUDIO_STREAM_URL, streamUrl);
+        bundle.putString(AUDIO_ARTIST, artist);
+        bundle.putString(AUDIO_TITLE, title);
+        bundle.putString(IMG_URL, artworkUrl);
+        intent.putExtras(bundle);
 
         startActivity(intent);
     }
@@ -557,30 +535,31 @@ public class AccountFragment extends Fragment implements // region Interfaces
     private android.accounts.Account createSyncAccount(Context context) {
         // Create the account type and default account
         android.accounts.Account newAccount = new android.accounts.Account(
-                SoundcloudConstants.USERNAME, ACCOUNT_TYPE);
+                USERNAME, ACCOUNT_TYPE);
         // Get an instance of the Android account manager
         AccountManager accountManager =
                 (AccountManager) context.getSystemService(
                         Context.ACCOUNT_SERVICE);
+
         /*
          * Add the account and account type, no password or user data
          * If successful, return the Account object, otherwise report an error.
          */
         if (accountManager.addAccountExplicitly(newAccount, null, null)) {
-            /*
-             * If you don't set android:syncable="true" in
-             * in your <provider> element in the manifest,
-             * then call context.setIsSyncable(account, AUTHORITY, 1)
-             * here.
-             */
+        /*
+         * If you don't set android:syncable="true" in
+         * in your <provider> element in the manifest,
+         * then call context.setIsSyncable(account, AUTHORITY, 1)
+         * here.
+         */
 
             Timber.d("Soundcloud : createSyncAccount() : success");
 
         } else {
-            /*
-             * The account exists or some other error occurred. Log this, report it,
-             * or handle it internally.
-             */
+        /*
+         * The account exists or some other error occurred. Log this, report it,
+         * or handle it internally.
+         */
             Timber.d("Soundcloud : createSyncAccount() : failure");
 
         }

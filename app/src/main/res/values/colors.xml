@@ -1,28 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
+    <color name="primary_light">#ff7733</color>
     <color name="primary">#ff5500</color>
     <color name="primary_dark">#CC4400</color>
-    <color name="accent">@color/debug_red</color>
-    <color name="control_normal">@color/debug_red</color>
-    <color name="control_highlight">#ff5500</color>
-    <color name="control_activated">#ff5500</color>
+    <color name="accent">@color/red_A400</color>
 
     <color name="semi_subtle_soundcloud">#FFAA80</color>
     <color name="subtle_soundcloud">#FFEEE6</color>
-    <color name="debug_yellow">#ffff00</color>
-    <color name="debug_red">#ff0000</color>
-    <color name="debug_blue">#0000ff</color>
 
-    <color name="transparent_black_five">#0D000000</color>
-    <color name="transparent_black_ten">#1A000000</color>
-    <color name="transparent_black_twenty">#33000000</color>
-    <color name="transparent_black_forty">#66000000</color>
-    <color name="transparent_black_fifty">#80000000</color>
-    <color name="transparent_black_sixty">#99000000</color>
-    <color name="transparent_black_seventy">#B3000000</color>
-    <color name="transparent_black_eighty">#CC000000</color>
-    <color name="transparent_black_ninty">#E6000000</color>
-    <color name="transparent_black_ninty_five">#F2000000</color>
+    <color name="five_percent_transparency_white">#0Dffffff</color>
+    <color name="ten_percent_transparency_white">#1Affffff</color>
+    <color name="twenty_percent_transparency_white">#33ffffff</color>
+    <color name="thirty_percent_transparency_white">#4Dffffff</color>
+    <color name="fifty_percent_transparency_white">#80ffffff</color>
+    <color name="sixty_percent_transparency_white">#99ffffff</color>
+    <color name="seventy_percent_transparency_white">#B3ffffff</color>
+    <color name="eighty_percent_transparency_white">#CCffffff</color>
+    <color name="ninty_percent_transparency_white">#E6ffffff</color>
+    <color name="ninty_five_percent_transparency_white">#F2ffffff</color>
+
+    <color name="five_percent_transparency_black">#0D000000</color>
+    <color name="ten_percent_transparency_black">#1A000000</color>
+    <color name="twenty_percent_transparency_black">#33000000</color>
+    <color name="forty_percent_transparency_black">#66000000</color>
+    <color name="fifty_percent_transparency_black">#80000000</color>
+    <color name="sixty_percent_transparency_black">#99000000</color>
+    <color name="seventy_percent_transparency_black">#B3000000</color>
+    <color name="eighty_percent_transparency_black">#CC000000</color>
+    <color name="ninty_percent_transparency_black">#E6000000</color>
+    <color name="ninty_five_percent_transparency_black">#F2000000</color>
 
 </resources>
